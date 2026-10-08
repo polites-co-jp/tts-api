@@ -7,7 +7,7 @@
 - `apps/chat` — 動作確認画面（profile `dev` のみ）
 - `tts-api-containers` — docker compose 構成
 
-設計と判断の経緯は [docs/design.md](docs/design.md)、ポートは [docs/port-registry.md](docs/port-registry.md)。
+設計と判断の経緯は [docs/design.md](docs/design.md)、モデルごとの実測は [docs/benchmark.md](docs/benchmark.md)、ポートは [docs/port-registry.md](docs/port-registry.md)。
 
 ## 起動
 
