@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TTS 動作確認</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>TTS 動作確認</h1>
+    <div id="engine-status" class="engine-status" aria-live="polite">接続を確認しています…</div>
+  </header>
+
+  <main class="layout">
+    <section class="panel" aria-labelledby="gen-title">
+      <h2 id="gen-title">生成</h2>
+
+      <label class="field">
+        <span>読み上げる文</span>
+        <textarea id="text" rows="5">こんにちは。今日はいい天気ですね。少し散歩にでも出かけましょうか。</textarea>
+      </label>
+
+      <div class="field">
+        <div class="row-between">
+          <label for="model">モデル</label>
+          <label class="inline"><input type="checkbox" id="compare"> 複数モデルで比較</label>
+        </div>
+        <select id="model"></select>
+        <fieldset id="compare-list" class="compare-list" hidden>
+          <legend>比較するモデル（上から順に生成）</legend>
+          <div id="compare-models"></div>
+        </fieldset>
+        <p class="hint" id="model-info"></p>
+      </div>
+
+      <label class="field">
+        <span>声</span>
+        <select id="voice"></select>
+      </label>
+
+      <label class="field">
+        <span>キャプション（音声デザイン・任意）</span>
+        <input type="text" id="caption" placeholder="例: 落ち着いた低めの女性の声で、ゆっくり話す">
+      </label>
+
+      <details class="options">
+        <summary>推論オプション</summary>
+        <div class="grid">
+          <label class="field"><span>話速</span><input type="number" id="speed" value="1" min="0.25" max="4" step="0.05"></label>
+          <label class="field"><span>ステップ数</span><input type="number" id="num_steps" min="1" max="200" step="1" placeholder="モデル既定"></label>
+          <label class="field"><span>CFG（文）</span><input type="number" id="cfg_scale_text" min="0" max="20" step="0.1" placeholder="3.0"></label>
+          <label class="field"><span>CFG（話者）</span><input type="number" id="cfg_scale_speaker" min="0" max="20" step="0.1" placeholder="5.0"></label>
+          <label class="field"><span>CFG（キャプション）</span><input type="number" id="cfg_scale_caption" min="0" max="20" step="0.1" placeholder="3.0"></label>
+          <label class="field"><span>seed</span><input type="number" id="seed" min="0" step="1" placeholder="ランダム"></label>
+        </div>
+        <label class="inline"><input type="checkbox" id="watermark" checked> 透かし（SilentCipher）を入れる</label>
+      </details>
+
+      <div class="actions">
+        <label class="inline"><input type="checkbox" id="autoplay" checked> 生成しながら再生</label>
+        <button type="button" id="stop" class="secondary" disabled>停止</button>
+        <button type="button" id="generate" class="primary">生成</button>
+      </div>
+
+      <div id="progress" class="progress" aria-live="polite"></div>
+      <div id="error" class="error" role="alert" hidden></div>
+
+      <h3>計測</h3>
+      <dl id="metrics" class="metrics"></dl>
+    </section>
+
+    <section class="panel" aria-labelledby="history-title">
+      <div class="row-between">
+        <h2 id="history-title">履歴</h2>
+        <button type="button" id="clear-history" class="link">すべて消す</button>
+      </div>
+      <p class="hint">生成した音声はこのブラウザ内に保存されます。</p>
+      <ol id="history" class="history"></ol>
+    </section>
+
+    <section class="panel" aria-labelledby="voices-title">
+      <h2 id="voices-title">声の登録</h2>
+      <form id="voice-form" class="voice-form">
+        <label class="field"><span>参照音声（1秒以上。wav / mp3 / m4a など）</span><input type="file" id="voice-file" accept="audio/*" required></label>
+        <div class="grid">
+          <label class="field"><span>名前</span><input type="text" id="voice-name" placeholder="例: 自分の声"></label>
+          <label class="field"><span>ID（任意）</span><input type="text" id="voice-id" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}" placeholder="自動で付けます"></label>
+        </div>
+        <label class="field"><span>書き起こし（任意）</span><input type="text" id="voice-transcript"></label>
+        <div class="actions"><button type="submit" class="primary">登録</button></div>
+        <div id="voice-error" class="error" role="alert" hidden></div>
+      </form>
+      <ul id="voices" class="voices"></ul>
+    </section>
+  </main>
+</body>
+</html>

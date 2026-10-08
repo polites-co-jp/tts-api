@@ -1,0 +1,29 @@
+[project]
+name = "engine-irodori"
+version = "0.1.0"
+description = "tts-api の Irodori-TTS エンジン（内部契約を話す推論サーバー）"
+requires-python = ">=3.11"
+# torch と Irodori-TTS 本体は Dockerfile で CUDA 版を入れる。ここには偽の推論器でも動く依存だけを書く
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "numpy>=1.26",
+    "soundfile>=0.12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.27.0",
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

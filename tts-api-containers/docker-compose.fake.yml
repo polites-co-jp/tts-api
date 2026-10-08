@@ -1,0 +1,10 @@
+# GPU なしで api と chat を確かめるための重ね書き。エンジンは偽の推論器（正弦波を返す）で動く
+#   docker compose -f docker-compose.yml -f docker-compose.fake.yml --profile dev up --build
+services:
+  engine-irodori:
+    build:
+      target: test
+    command: ["python", "-m", "engine_irodori"]
+    environment:
+      ENGINE_BACKEND: fake
+    deploy: !reset {}

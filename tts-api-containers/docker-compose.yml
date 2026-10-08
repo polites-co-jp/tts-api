@@ -1,0 +1,70 @@
+name: tts-api
+
+# ホスト公開ポートは Notion「ポート管理」で予約した 22500-22599 の範囲内に限る（docs/port-registry.md）
+# エンジンは TTS ごとに別コンテナ。api は ENGINES に書いたエンジンへモデル名で振り分ける
+services:
+  # Irodori-TTS エンジン。ホストへは公開しない
+  engine-irodori:
+    build:
+      context: ../apps/engine-irodori
+      target: runtime
+      args:
+        TORCH_INDEX: ${IRODORI_TORCH_INDEX:-cu128}
+    restart: unless-stopped
+    init: true
+    environment:
+      ENGINE_BACKEND: ${IRODORI_BACKEND:-irodori}
+      ENGINE_DEFAULT_MODEL: ${IRODORI_DEFAULT_MODEL:-irodori-v4.1-small}
+      ENGINE_PRELOAD: ${IRODORI_PRELOAD:-1}
+      ENGINE_MODEL_PRECISION: ${IRODORI_MODEL_PRECISION:-bf16}
+      ENGINE_CODEC_PRECISION: ${IRODORI_CODEC_PRECISION:-fp32}
+      ENGINE_COMPILE_MODEL: ${IRODORI_COMPILE_MODEL:-0}
+      # 透かし（SilentCipher）の既定。リクエストの options.watermark で上書きできる
+      ENGINE_WATERMARK: ${IRODORI_WATERMARK:-1}
+      ENGINE_VOICES_DIR: /data/voices
+      ENGINE_LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # 重み（Hugging Face のキャッシュ）はホストのディレクトリに置く。全モデルを試すと 40GB を超える
+      - ${HF_CACHE_DIR:-E:/hf-cache}:/home/engine/.cache/huggingface
+      # 声は api が書き、エンジンは読むだけ
+      - voices:/data/voices:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_ID:-0}"]
+              capabilities: [gpu]
+
+  api:
+    build: ../apps/api
+    restart: unless-stopped
+    environment:
+      ENGINES: irodori=http://engine-irodori:8000
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-}
+      UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-900000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - voices:/data/voices
+    ports:
+      # api は認証を持たない。ホスト外へ公開しない
+      - "127.0.0.1:${API_HOST_PORT:-22500}:8080"
+    depends_on:
+      - engine-irodori
+
+  # 開発用の動作確認画面。profile "dev" のときだけ起動する
+  chat:
+    build: ../apps/chat
+    profiles: ["dev"]
+    restart: unless-stopped
+    environment:
+      TTS_API_URL: http://api:8080
+    ports:
+      - "127.0.0.1:${CHAT_HOST_PORT:-22501}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  # 登録した声（参照音声）。作り直しても消えない
+  voices:
