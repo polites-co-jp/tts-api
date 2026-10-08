@@ -32,19 +32,22 @@ OpenAI 互換に、エンジン固有の指定を入れる `options` を足す�
 - `POST /v1/audio/speech`
   - `model`: 例 `irodori-v4.1-small`。省略時は既定モデル
   - `input`: 読み上げる文
-  - `voice`: 登録した声の ID。省略すると参照なしで生成する
+  - `voice`: 登録した声の ID（文字列か `{"id": ...}`）。省略・空・`"none"` なら参照なしで生成する（OpenAI SDK は voice を必須にしているため `"none"` を用意した）。未登録の ID は 400
+  - `instructions`: OpenAI の声・話し方の指示。`options.caption` が無ければキャプションとして使う
   - `response_format`: `wav` / `mp3` / `opus` / `flac` / `pcm`（wav 以外は ffmpeg で変換）
   - `speed`
   - `stream_format`: `"sse"` のとき OpenAI と同じ形のイベント（`speech.audio.delta` / `speech.audio.done`）で文ごとに送る。省略時は結合した音声を一括で返す
   - `options`: エンジン固有。Irodori では `num_steps`、`cfg_scale_text`、`cfg_scale_speaker`、`seed`、`caption`（音声デザイン）、`watermark`
 - `GET /v1/models`: 全エンジンのモデル一覧（読み込み済みかどうかを含む）
 - `GET /v1/voices` / `POST /v1/voices`（multipart で参照音声をアップロード）/ `DELETE /v1/voices/{id}`
-- 応答には計測値を付ける（ヘッダーまたは SSE の done イベント）: モデル読込時間、最初の音までの時間、全体の生成時間、RTF、VRAM 使用量
+- 応答には計測値を付ける（一括返却では `X-TTS-Metrics` ヘッダの JSON、SSE では done イベントの `metrics`）: 待ち時間、モデル読込時間、最初の音までの時間、生成時間、全体、音声の長さ、RTF、VRAM（ピーク・確保・GPU 全体）、エンジンのメインメモリ（RSS）、seed
+- SSE の各 delta は、その文だけで完結した音声ファイル（指定形式）を base64 で持つ。読み込みや順番待ちで音が出ないあいだは 10 秒ごとにコメント行 `: keepalive` を送る
 
 ## 声
 
 - 参照音声によるクローン、キャプションによる音声デザイン、参照なしの3通りを最初から入れる。プリセット声は同梱しない。
 - 声は api がボリュームへ一括保管する（音声ファイル＋メタデータ）。エンジンへは読み取り専用で共有し、どのエンジンでも同じ声 ID が使える。
+- アップロードされた音声は ffmpeg でモノラル・48kHz・16bit の wav に揃えてから保存する（エンジンは形式を気にしなくてよい）。1 秒未満は受け付けない。書き起こしも任意で持つ（今のエンジンは使わない）。
 - モデルごとの参照音声の潜在表現は、各エンジンが自分でキャッシュする。
 
 ## エンジン（engine-irodori）
@@ -53,7 +56,9 @@ OpenAI 互換に、エンジン固有の指定を入れる `options` を足す�
 - 起動時に既定モデル（v4.1-Small）を読み込む。別のモデルが要求されたら、今のモデルを解放してから読み込む（1枠）。待機中も解放しない。
 - 合成は1件ずつ順番に処理する。
 - モデルの読み込みで VRAM が溢れたらエラーを返し、枠を空にする。
-- 長文は「。！？」と改行で分割して生成する。
+- 長文は「。！？」と改行で分割して生成する。6 文字未満の断片は次の文と結合し、160 文字を超える文は読点で割る。文と文の間には 0.12 秒の無音を挟む。
+- seed を省略したときは1リクエストで1つだけ決め、全部の文に同じ seed を使う（参照なしでは seed で声が決まるため、文ごとに声が変わらないように）。
+- 参照音声は codec で潜在表現にしてキャッシュし、分割した文ごとに符号化し直さない。
 - 透かし（SilentCipher）は既定で有効、環境変数とリクエストの `options.watermark` で切れる。
 - ホストへは公開しない。
 
@@ -69,9 +74,19 @@ OpenAI 互換に、エンジン固有の指定を入れる `options` を足す�
 
 旧版（500M v2/v3、VoiceDesign v2 / 600M-v3）は入れない。v4-Large の重みは Gemma 利用規約。
 
+### メモリの扱い
+
+- 上流の読み込み処理は重みを CPU に展開してから GPU へ移す。解放後も glibc の malloc が領域を抱えたままになり、モデルが GPU にあってもメインメモリを数 GB 使い続けたので、読み込みと解放のあとに `malloc_trim` で OS へ返す（実測: Large int8 を載せた状態で RSS 8.6GB → 3.2GB）。
+- 上流は重みを元の精度のまま GPU へ移してから bf16 に変換する。v4-Large は fp32 の 13GB を一度 GPU に置くので、読み込みの瞬間は VRAM を 13GB 以上使う。読み込み後に PyTorch のキャッシュを返し、確保量を実際の使用量まで下げる。
+
 ### 内部契約（エンジンが実装するもの）
 
-外向き API と同じ形の `POST /v1/audio/speech` と `GET /v1/models` に、`GET /health` を加える。声は api から参照音声のパスで渡す。
+外向き API とほぼ同じ形の `POST /v1/audio/speech` と `GET /v1/models` に、`GET /health` を加える。
+
+- 声は api から参照音声のパス（`references`、共有した声の置き場の中）で渡す。
+- `response_format` は `wav` と `pcm` だけを実装すればよい。mp3 / opus / aac / flac は api が wav を受け取って ffmpeg で変換する。
+- 一括返却では `X-TTS-Metrics` と `X-TTS-Sample-Rate` を返す。SSE の形は外向きと同じ。
+- エラーは OpenAI と同じ `{"error": {"message", "type", "code"}}`。VRAM 不足は 503 `insufficient_vram`。
 
 ## chat
 

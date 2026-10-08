@@ -76,6 +76,34 @@ def new_seed() -> int:
     return int(secrets.randbits(31))
 
 
+def host_rss_mb() -> float | None:
+    """このプロセスがメインメモリに持っている量（RSS）"""
+    try:
+        with open("/proc/self/status", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except OSError:
+        return None
+    return None
+
+
+def release_host_memory() -> None:
+    """解放済みのメモリを OS へ返す。
+
+    重みは一度 CPU 側に展開してから GPU へ移すため、glibc の malloc が解放後の領域を抱えたままになり、
+    モデルが GPU にあってもメインメモリを数 GB 使い続ける。malloc_trim で返させる。
+    """
+    import ctypes
+    import gc
+
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
 # ---------------------------------------------------------------------------
 # 偽の推論器: 文字数に比例した長さの正弦波を返す。GPU も重みも使わない
 
@@ -117,7 +145,7 @@ class FakeBackend:
         pass
 
     def memory(self) -> dict[str, float] | None:
-        return None
+        return {"host_rss_mb": host_rss_mb()} if host_rss_mb() is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +229,12 @@ class IrodoriBackend:
             codec_precision=self.settings.codec_precision,
             compile_model=self.settings.compile_model,
         )
-        runtime = self.run_guarded(lambda: InferenceRuntime.from_key(key))
+        try:
+            runtime = self.run_guarded(lambda: InferenceRuntime.from_key(key))
+        finally:
+            # 上流は重みを元の精度のまま GPU へ移してから変換するので、読み込み中に確保した領域を返す
+            # （v4-Large は fp32 の 13GB を一度 GPU に置く）
+            self.empty_cache()
         return IrodoriModel(runtime, self)
 
     def run_guarded(self, fn):  # noqa: ANN001, ANN201
@@ -214,11 +247,9 @@ class IrodoriBackend:
             raise OutOfMemory(str(exc)) from exc
 
     def empty_cache(self) -> None:
-        import gc
-
         import torch
 
-        gc.collect()
+        release_host_memory()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -236,6 +267,7 @@ class IrodoriBackend:
         free, total = torch.cuda.mem_get_info()
         mib = 1024 * 1024
         return {
+            "host_rss_mb": host_rss_mb(),
             "vram_peak_mb": round(torch.cuda.max_memory_allocated() / mib, 1),
             "vram_reserved_mb": round(torch.cuda.memory_reserved() / mib, 1),
             "gpu_used_mb": round((total - free) / mib, 1),

@@ -24,6 +24,7 @@ from .backends import (
     SegmentRequest,
     SegmentResult,
     create_backend,
+    host_rss_mb,
     new_seed,
 )
 from .catalog import MODELS, MODELS_BY_ID
@@ -157,6 +158,7 @@ def create_app(settings: Settings | None = None, backend: Backend | None = None)
             "loaded_model": slot.model_id,
             "loading_model": slot.loading_id,
             "last_error": slot.last_error,
+            "host_rss_mb": host_rss_mb(),
         }
 
     @app.get("/v1/models")
@@ -329,6 +331,10 @@ def sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
 
+# モデルの読み込みや順番待ちで音声がしばらく出ないあいだ、途中の中継やクライアントが無通信で切らないように送るコメント行
+KEEPALIVE_SECONDS = 10.0
+
+
 async def sse_events(
     run: SynthesisRun,
     segments: list[str],
@@ -336,41 +342,72 @@ async def sse_events(
     fmt: str,
     seed: int,
 ) -> AsyncIterator[str]:
-    async with run.slot.request_lock:
-        results: list[SegmentResult] = []
-        try:
-            await run.start()
-            for index, text in enumerate(segments):
-                result = await run.segment(segment_request(text))
-                results.append(result)
-                yield sse(
-                    {
-                        "type": "speech.audio.delta",
-                        "audio": base64.b64encode(audio.encode(result.audio, result.sample_rate, fmt)).decode(),
-                        "segment": {
-                            "index": index,
-                            "count": len(segments),
-                            "text": text,
-                            "audio_seconds": round(len(result.audio) / result.sample_rate, 3),
-                            "sample_rate": result.sample_rate,
-                            "messages": result.messages,
-                        },
-                    }
-                )
-        except ModelLoadError as exc:
-            err = load_error(exc)
-            yield sse({"type": "error", **error_body(err.message, err.code, err.type)})
-            return
-        except OutOfMemory as exc:
-            message = f"合成中に VRAM が足りなくなりました: {exc}"
-            yield sse({"type": "error", **error_body(message, "insufficient_vram", "server_error")})
-            return
-        except ValueError as exc:
-            yield sse({"type": "error", **error_body(str(exc), "invalid_request")})
-            return
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("synthesis failed")
-            yield sse({"type": "error", **error_body(f"合成に失敗しました: {exc}", "synthesis_failed", "server_error")})
-            return
-        metrics = await run.finish(results, seed)
-        yield sse({"type": "speech.audio.done", "metrics": metrics})
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    producer = asyncio.create_task(_produce_sse(run, segments, segment_request, fmt, seed, queue))
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=KEEPALIVE_SECONDS)
+            except TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+            if item is None:
+                break
+            yield item
+    finally:
+        # 呼び出し元が切断したら残りの文は生成しない
+        producer.cancel()
+
+
+async def _produce_sse(
+    run: SynthesisRun,
+    segments: list[str],
+    segment_request: Callable[[str], SegmentRequest],
+    fmt: str,
+    seed: int,
+    queue: asyncio.Queue[str | None],
+) -> None:
+    try:
+        async with run.slot.request_lock:
+            results: list[SegmentResult] = []
+            try:
+                await run.start()
+                for index, text in enumerate(segments):
+                    result = await run.segment(segment_request(text))
+                    results.append(result)
+                    await queue.put(
+                        sse(
+                            {
+                                "type": "speech.audio.delta",
+                                "audio": base64.b64encode(audio.encode(result.audio, result.sample_rate, fmt)).decode(),
+                                "segment": {
+                                    "index": index,
+                                    "count": len(segments),
+                                    "text": text,
+                                    "audio_seconds": round(len(result.audio) / result.sample_rate, 3),
+                                    "sample_rate": result.sample_rate,
+                                    "messages": result.messages,
+                                },
+                            }
+                        )
+                    )
+            except ModelLoadError as exc:
+                err = load_error(exc)
+                await queue.put(sse({"type": "error", **error_body(err.message, err.code, err.type)}))
+                return
+            except OutOfMemory as exc:
+                message = f"合成中に VRAM が足りなくなりました: {exc}"
+                await queue.put(sse({"type": "error", **error_body(message, "insufficient_vram", "server_error")}))
+                return
+            except ValueError as exc:
+                await queue.put(sse({"type": "error", **error_body(str(exc), "invalid_request")}))
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("synthesis failed")
+                message = f"合成に失敗しました: {exc}"
+                await queue.put(sse({"type": "error", **error_body(message, "synthesis_failed", "server_error")}))
+                return
+            metrics = await run.finish(results, seed)
+            await queue.put(sse({"type": "speech.audio.done", "metrics": metrics}))
+    finally:
+        await queue.put(None)

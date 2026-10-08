@@ -163,6 +163,7 @@ const METRIC_LABELS = [
   ["vram_peak_mb", "VRAM ピーク", "MB"],
   ["vram_reserved_mb", "VRAM 確保", "MB"],
   ["gpu_used_mb", "GPU 全体の使用", "MB"],
+  ["host_rss_mb", "メインメモリ（エンジン）", "MB"],
   ["segments", "分割数", ""],
   ["seed", "seed", ""],
 ];

@@ -185,3 +185,21 @@ def test_preload_loads_default_model(voices_dir: Path) -> None:
     with TestClient(create_app(settings, backend)) as c:
         c.post("/v1/audio/speech", json={"input": "テスト"})
     assert backend.loaded == ["irodori-v4.1-small"]
+
+
+def test_sse_sends_keepalive_while_waiting(voices_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    import engine_irodori.app as app_module
+
+    class SlowBackend(FakeBackend):
+        def load(self, spec):  # noqa: ANN001, ANN201
+            time.sleep(0.35)
+            return super().load(spec)
+
+    monkeypatch.setattr(app_module, "KEEPALIVE_SECONDS", 0.1)
+    settings = Settings(backend="fake", preload=False, voices_dir=voices_dir)
+    with TestClient(create_app(settings, SlowBackend())) as c:
+        res = c.post("/v1/audio/speech", json={"input": "テスト", "stream_format": "sse"})
+    assert ": keepalive" in res.text
+    assert sse_events(res.text)[-1]["type"] == "speech.audio.done"

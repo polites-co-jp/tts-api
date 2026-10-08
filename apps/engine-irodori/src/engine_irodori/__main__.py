@@ -13,6 +13,8 @@ def main() -> None:
         level=os.environ.get("ENGINE_LOG_LEVEL", "INFO").upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Hugging Face からの取得で1ファイルごとに出る要求ログを抑える
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     uvicorn.run(
         create_app(),
         host=os.environ.get("ENGINE_HOST", "0.0.0.0"),
