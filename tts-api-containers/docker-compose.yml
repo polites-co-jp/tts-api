@@ -24,8 +24,8 @@ services:
       ENGINE_VOICES_DIR: /data/voices
       ENGINE_LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
-      # 重み（Hugging Face のキャッシュ）はホストのディレクトリに置く。全モデルを試すと 40GB を超える
-      - ${HF_CACHE_DIR:-E:/hf-cache}:/home/engine/.cache/huggingface
+      # 重み（Hugging Face のキャッシュ）。全モデルを試すと 40GB を超える
+      - hf-cache:/home/engine/.cache/huggingface
       # 声は api が書き、エンジンは読むだけ
       - voices:/data/voices:ro
     deploy:
@@ -66,5 +66,8 @@ services:
         condition: service_healthy
 
 volumes:
+  # 重みの置き場。ホストのディレクトリ（Docker Desktop では 9p 経由）は読み出しが約 40MB/s しか出ず、
+  # 切り替えに Small で約 2.5 分、Large で約 7 分かかったので、Docker のディスク上に置く
+  hf-cache:
   # 登録した声（参照音声）。作り直しても消えない
   voices:

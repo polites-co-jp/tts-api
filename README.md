@@ -13,14 +13,14 @@
 
 ```sh
 cd tts-api-containers
-cp .env.example .env   # 重みの置き場（HF_CACHE_DIR）などを必要に応じて変える
+cp .env.example .env   # 既定モデルやポートを必要に応じて変える
 docker compose --profile dev up -d --build
 ```
 
 - API: http://127.0.0.1:22500
 - 動作確認画面: http://127.0.0.1:22501
 
-起動すると既定モデル（`irodori-v4.1-small`）を読み込む。初回は重みの取得に数分かかる。
+起動すると既定モデル（`irodori-v4.1-small`）を読み込む。初回は重みの取得に数分かかる。重みは名前付きボリューム `tts-api_hf-cache` に溜まる（全モデルで 40GB 超）。
 GPU なしで api と chat だけを確かめるときは、偽のエンジン（正弦波を返す）で起動する。
 
 ```sh
